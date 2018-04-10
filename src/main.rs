@@ -6,10 +6,12 @@ extern crate trust_dns_proto;
 #[macro_use] extern crate failure_derive;
 #[macro_use] extern crate lazy_static;
 
-use std::str::FromStr;
+use std::env;
 use std::io;
+use std::str::FromStr;
 
-use trust_dns::client::{Client, ClientConnection, ClientFuture, ClientStreamHandle, SyncClient};
+use trust_dns::client::{BasicClientHandle, Client, ClientConnection, ClientFuture, ClientStreamHandle, SyncClient};
+use trust_dns::error::ClientError;
 use trust_dns::udp::UdpClientConnection;
 use trust_dns::tcp::TcpClientConnection;
 use trust_dns::rr::{DNSClass, Name, RData, Record, RecordType};
@@ -113,18 +115,90 @@ fn support_edns0<CC>(conn: CC) -> Result<(), Error>
     }
 }
 
+#[derive(Debug)]
+enum Edns0TestResult {
+    Success,
+    Fail(&'static str),
+}
+
+fn support_edns0_future<DH>(dns_handle: &mut DH) -> impl Future<Item=Edns0TestResult, Error=&'static str>
+    where DH: DnsHandle
+{
+    let query = Query::query(TESTING_SERVER.clone(), RecordType::A);
+    let mut edns = Edns::new();
+    let v = vec![];
+    edns.set_option(EdnsOption::from((EdnsCode::Zero, &v[..])));
+    let mut msg = Message::new();
+    msg.add_query(query);
+    msg.set_edns(edns);
+
+    dns_handle
+        .send(msg)
+        .map(|msg| {
+            if let Some(edns) = msg.edns() {
+                if edns.version() == 0 {
+                    Edns0TestResult::Success
+                } else {
+                    Edns0TestResult::Fail("Wrong EDNS option")
+                }
+            } else {
+                Edns0TestResult::Fail("No EDNS option")
+            }
+        })
+        .map_err(|_| "Internal error in EDNS0 Future")
+}
+
+// fn support_simple_answers_future<DH>(dns_handle: &mut DH) -> Box<Future<Item=Message, Error=ClientError>>
+//     where DH: DnsHandle,
+//           <DH as DnsHandle>::Error: std::error::Error
+fn support_simple_answers_future<DH>(dns_handle: &mut DH) -> impl Future<Item=(), Error=DH::Error>
+  where DH: DnsHandle
+{
+    dns_handle
+        .lookup(Query::query(TESTING_SERVER.clone(), RecordType::A))
+        .map(|_| ())
+}
+
 fn main() {
-    let address = "8.8.8.8:53".parse().unwrap();
-    
-    let connection = UdpClientConnection::new(address).unwrap();
-    let udp_client = SyncClient::new(connection.clone());
-    println!("Support UDP answers: {:?}", support_simple_answers(udp_client));
+    let address = "127.0.0.1:53".parse().unwrap();
+    //let address = "8.8.8.8:53".parse().unwrap();
 
-    {
-        let connection = TcpClientConnection::new(address).unwrap();
-        let tcp_client = SyncClient::new(connection);
-        println!("Support TCP answers: {:?}", support_simple_answers(tcp_client));
+    if let Some(_) = env::args().nth(1) {
+        let connection = UdpClientConnection::new(address).unwrap();
+        let udp_client = SyncClient::new(connection.clone());
+        println!("Support UDP answers: {:?}", support_simple_answers(udp_client));
+
+        {
+            let connection = TcpClientConnection::new(address).unwrap();
+            let tcp_client = SyncClient::new(connection);
+            println!("Support TCP answers: {:?}", support_simple_answers(tcp_client));
+        }
+
+        println!("Support EDNS0: {:?}", support_edns0(connection));
+    } else {
+        // no arg
+
+        // create connections
+        let udp_conn = UdpClientConnection::new(address).unwrap();
+        let tcp_conn = TcpClientConnection::new(address).unwrap();
+
+        // instantiate tokio.rs reactor
+        let mut reactor = Core::new().unwrap();
+        let handle = &reactor.handle();
+
+        // UDP stream, where stream is a series of Futures??
+        let (udp_stream, udp_stream_handle) = udp_conn.new_stream(handle).unwrap();
+        let (tcp_stream, tcp_stream_handle) = tcp_conn.new_stream(handle).unwrap();
+
+        // run basic UDP test
+        let mut udp_client_handle = ClientFuture::new(udp_stream, udp_stream_handle, handle, None);
+        println!("Basic UDP: {:?}", reactor.run(support_simple_answers_future(&mut udp_client_handle)));
+
+        // run basic TCP test
+        //let mut tcp_client_handle = ClientFuture::new(tcp_stream, tcp_stream_handle, handle, None);
+        //println!("Basic TCP: {:?}", reactor.run(support_simple_answers_future(&mut tcp_client_handle)));
+
+        // run edns0 test
+        println!("Basic TCP: {:?}", reactor.run(support_edns0_future(&mut udp_client_handle)));
     }
-
-    println!("Support EDNS0: {:?}", support_edns0(connection));
 }
