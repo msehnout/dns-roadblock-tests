@@ -159,6 +159,32 @@ fn support_simple_answers_future<DH>(dns_handle: &mut DH) -> impl Future<Item=()
         .map(|_| ())
 }
 
+fn run_tests(address: std::net::SocketAddr) -> Result<(), Error> {
+    // create connections
+    let udp_conn = UdpClientConnection::new(address).unwrap();
+    let tcp_conn = TcpClientConnection::new(address).unwrap();
+
+    // instantiate tokio.rs reactor
+    let mut reactor = Core::new().unwrap();
+    let handle = &reactor.handle();
+
+    // UDP stream, where stream is a series of Futures??
+    let (udp_stream, udp_stream_handle) = udp_conn.new_stream(handle).unwrap();
+    let (tcp_stream, tcp_stream_handle) = tcp_conn.new_stream(handle).unwrap();
+
+    // run basic UDP test
+    let mut udp_client_handle = ClientFuture::new(udp_stream, udp_stream_handle, handle, None);
+    // println!("Basic UDP: {:?}", reactor.run(support_simple_answers_future(&mut udp_client_handle)));
+
+    // run basic TCP test
+    //let mut tcp_client_handle = ClientFuture::new(tcp_stream, tcp_stream_handle, handle, None);
+    //println!("Basic TCP: {:?}", reactor.run(support_simple_answers_future(&mut tcp_client_handle)));
+
+    // run edns0 test
+    println!("Edns0 UDP: {:?}", reactor.run(support_edns0_future(&mut udp_client_handle)));
+    Ok(())
+}
+
 fn main() {
     let address = "127.0.0.1:53".parse().unwrap();
     //let address = "8.8.8.8:53".parse().unwrap();
@@ -177,28 +203,8 @@ fn main() {
         println!("Support EDNS0: {:?}", support_edns0(connection));
     } else {
         // no arg
-
-        // create connections
-        let udp_conn = UdpClientConnection::new(address).unwrap();
-        let tcp_conn = TcpClientConnection::new(address).unwrap();
-
-        // instantiate tokio.rs reactor
-        let mut reactor = Core::new().unwrap();
-        let handle = &reactor.handle();
-
-        // UDP stream, where stream is a series of Futures??
-        let (udp_stream, udp_stream_handle) = udp_conn.new_stream(handle).unwrap();
-        let (tcp_stream, tcp_stream_handle) = tcp_conn.new_stream(handle).unwrap();
-
-        // run basic UDP test
-        let mut udp_client_handle = ClientFuture::new(udp_stream, udp_stream_handle, handle, None);
-        println!("Basic UDP: {:?}", reactor.run(support_simple_answers_future(&mut udp_client_handle)));
-
-        // run basic TCP test
-        //let mut tcp_client_handle = ClientFuture::new(tcp_stream, tcp_stream_handle, handle, None);
-        //println!("Basic TCP: {:?}", reactor.run(support_simple_answers_future(&mut tcp_client_handle)));
-
-        // run edns0 test
-        println!("Basic TCP: {:?}", reactor.run(support_edns0_future(&mut udp_client_handle)));
+        run_tests(address);
+        let address = "8.8.8.8:53".parse().unwrap();
+        run_tests(address);
     }
 }
