@@ -122,11 +122,11 @@ fn run_tests(address: std::net::SocketAddr) -> Result<(), Error> {
 
     // run basic UDP test
     let mut udp_client_handle = ClientFuture::new(udp_stream, udp_stream_handle, handle, None);
-    // println!("Basic UDP: {:?}", reactor.run(support_simple_answers_future(&mut udp_client_handle)));
+    println!("[{}] Basic UDP: {:?}", address, reactor.run(support_simple_answers(&mut udp_client_handle)));
 
     // run basic TCP test
-    //let mut tcp_client_handle = ClientFuture::new(tcp_stream, tcp_stream_handle, handle, None);
-    //println!("Basic TCP: {:?}", reactor.run(support_simple_answers_future(&mut tcp_client_handle)));
+    let mut tcp_client_handle = ClientFuture::new(tcp_stream, tcp_stream_handle, handle, None);
+    println!("[{}] Basic TCP: {:?}", address, reactor.run(support_simple_answers(&mut tcp_client_handle)));
 
     // run edns0 test
     println!("[{}] Edns0 UDP: {:?}", address, reactor.run(support_edns0(&mut udp_client_handle)));
@@ -142,10 +142,10 @@ fn main() {
         println!("With args...");
     } else {
         // no arg
-        run_tests(address);
+        let _ = run_tests(address);
         let address = "8.8.8.8:53".parse().unwrap();
-        run_tests(address);
+        let _ = run_tests(address);
         let address = "1.1.1.1:53".parse().unwrap();
-        run_tests(address);
+        let _ = run_tests(address);
     }
 }
