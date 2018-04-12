@@ -29,6 +29,12 @@ lazy_static! {
                                             .expect("Name building should never fail.");
 }
 
+#[derive(Debug)]
+enum TestResult {
+    Success,
+    Fail(&'static str),
+}
+
 /*
  3.1.1.  Supports UDP Answers
 
@@ -55,14 +61,12 @@ lazy_static! {
    SUCCESS: A DNS response was received that contains an A record in the
    answer section.  (The data itself does not need to be checked.)
 */
-
-fn support_simple_answers<CC>(client: SyncClient<CC>) -> Result<(), &'static str>
-  where CC: ClientConnection,
-        <CC as ClientConnection>::MessageStream: Stream<Item=Vec<u8>, Error=io::Error> + 'static
+fn support_simple_answers<DH>(dns_handle: &mut DH) -> impl Future<Item=(), Error=DH::Error>
+    where DH: DnsHandle
 {
-    client.query(&TESTING_SERVER, DNSClass::IN, RecordType::A)
-          .map(|_| ())
-          .map_err(|_| "query failed")
+    dns_handle
+        .lookup(Query::query(TESTING_SERVER.clone(), RecordType::A))
+        .map(|_| ())
 }
 
 /*
@@ -81,53 +85,16 @@ fn support_simple_answers<CC>(client: SyncClient<CC>) -> Result<(), &'static str
    with version number 0.
 
 */
-
-fn support_edns0<CC>(conn: CC) -> Result<(), Error>
-  where CC: ClientConnection,
-        <CC as ClientConnection>::MessageStream: Stream<Item=Vec<u8>, Error=io::Error> + 'static
-{
-    
-    let query = Query::query(TESTING_SERVER.clone(), RecordType::A);
-    let mut edns = Edns::new();
-    let v = vec![];
-    edns.set_option(EdnsOption::from((EdnsCode::Zero, &v[..])));
-    let mut msg = Message::new();
-    msg.add_query(query);
-    msg.set_edns(edns);
-
-    let mut reactor = Core::new()?;
-    let handle = &reactor.handle();
-    let (stream, stream_handle) = conn.new_stream(handle).unwrap();
-    let mut client_handle = ClientFuture::new(stream, stream_handle, handle, None);
-    let response_future = client_handle.send(msg);
-    if let Ok(msg) = reactor.run(response_future) {
-        if let Some(edns) = msg.edns() {
-            if edns.version() == 0 {
-                Ok(())
-            } else {
-                Err(format_err!("Wrong EDNS option"))
-            }
-        } else {
-            Err(format_err!("No EDNS option"))
-        }
-    } else {
-        Err(format_err!("error in reactor"))
-    }
-}
-
-#[derive(Debug)]
-enum Edns0TestResult {
-    Success,
-    Fail(&'static str),
-}
-
-fn support_edns0_future<DH>(dns_handle: &mut DH) -> impl Future<Item=Edns0TestResult, Error=&'static str>
+fn support_edns0<DH>(dns_handle: &mut DH) -> impl Future<Item=TestResult, Error=DH::Error>
     where DH: DnsHandle
 {
+    // Create a query
     let query = Query::query(TESTING_SERVER.clone(), RecordType::A);
+    // Create an EDNS struct
     let mut edns = Edns::new();
     let v = vec![];
     edns.set_option(EdnsOption::from((EdnsCode::Zero, &v[..])));
+    // Finally, assemble a message
     let mut msg = Message::new();
     msg.add_query(query);
     msg.set_edns(edns);
@@ -137,26 +104,14 @@ fn support_edns0_future<DH>(dns_handle: &mut DH) -> impl Future<Item=Edns0TestRe
         .map(|msg| {
             if let Some(edns) = msg.edns() {
                 if edns.version() == 0 {
-                    Edns0TestResult::Success
+                    TestResult::Success
                 } else {
-                    Edns0TestResult::Fail("Wrong EDNS option")
+                    TestResult::Fail("Wrong EDNS option")
                 }
             } else {
-                Edns0TestResult::Fail("No EDNS option")
+                TestResult::Fail("No EDNS option")
             }
         })
-        .map_err(|_| "Internal error in EDNS0 Future")
-}
-
-// fn support_simple_answers_future<DH>(dns_handle: &mut DH) -> Box<Future<Item=Message, Error=ClientError>>
-//     where DH: DnsHandle,
-//           <DH as DnsHandle>::Error: std::error::Error
-fn support_simple_answers_future<DH>(dns_handle: &mut DH) -> impl Future<Item=(), Error=DH::Error>
-  where DH: DnsHandle
-{
-    dns_handle
-        .lookup(Query::query(TESTING_SERVER.clone(), RecordType::A))
-        .map(|_| ())
 }
 
 fn run_tests(address: std::net::SocketAddr) -> Result<(), Error> {
@@ -181,7 +136,7 @@ fn run_tests(address: std::net::SocketAddr) -> Result<(), Error> {
     //println!("Basic TCP: {:?}", reactor.run(support_simple_answers_future(&mut tcp_client_handle)));
 
     // run edns0 test
-    println!("Edns0 UDP: {:?}", reactor.run(support_edns0_future(&mut udp_client_handle)));
+    println!("[{}] Edns0 UDP: {:?}", address, reactor.run(support_edns0(&mut udp_client_handle)));
     Ok(())
 }
 
@@ -190,17 +145,7 @@ fn main() {
     //let address = "8.8.8.8:53".parse().unwrap();
 
     if let Some(_) = env::args().nth(1) {
-        let connection = UdpClientConnection::new(address).unwrap();
-        let udp_client = SyncClient::new(connection.clone());
-        println!("Support UDP answers: {:?}", support_simple_answers(udp_client));
-
-        {
-            let connection = TcpClientConnection::new(address).unwrap();
-            let tcp_client = SyncClient::new(connection);
-            println!("Support TCP answers: {:?}", support_simple_answers(tcp_client));
-        }
-
-        println!("Support EDNS0: {:?}", support_edns0(connection));
+        println!("With args...");
     } else {
         // no arg
         run_tests(address);
